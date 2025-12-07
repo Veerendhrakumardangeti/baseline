@@ -1,11 +1,13 @@
 import os
+import argparse
 import numpy as np
 from tqdm import tqdm
-import argparse
+
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import confusion_matrix, classification_report
+
 
 class ECGDataset(Dataset):
     def __init__(self, X, y, transforms=None):
@@ -21,10 +23,11 @@ class ECGDataset(Dataset):
     def __getitem__(self, idx):
         x = self.X[idx]
         y = self.y[idx]
-        if self.transforms:
+        if self.transforms is not None:
             x = self.transforms(x)
         x = np.asarray(x, dtype=np.float32)
         return torch.from_numpy(x), int(y)
+
 
 class Baseline1DCNN(nn.Module):
     def __init__(self, in_channels=1, n_classes=5, dropout=0.3):
@@ -34,40 +37,47 @@ class Baseline1DCNN(nn.Module):
             nn.BatchNorm1d(32),
             nn.ReLU(),
             nn.MaxPool1d(2),
+
             nn.Conv1d(32, 64, 5, padding=2),
             nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.MaxPool1d(2),
+
             nn.Conv1d(64, 128, 5, padding=2),
             nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.AdaptiveAvgPool1d(1),
+
             nn.Flatten(),
             nn.Dropout(dropout),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(64, n_classes)
+            nn.Linear(64, n_classes),
         )
 
     def forward(self, x):
         return self.net(x)
 
+
 def add_noise(x):
     return x + np.random.normal(0, 0.01, x.shape)
+
 
 def scale_signal(x):
     s = np.random.uniform(0.9, 1.1)
     return x * s
+
 
 def default_transforms(x):
     x = add_noise(x)
     x = scale_signal(x)
     return x
 
+
 def train_epoch(model, loader, opt, loss_fn, device):
     model.train()
-    total_loss = 0
+    total_loss = 0.0
     preds = []
     trues = []
     for x, y in loader:
@@ -75,20 +85,24 @@ def train_epoch(model, loader, opt, loss_fn, device):
         y = y.to(device)
         out = model(x)
         loss = loss_fn(out, y)
+
         opt.zero_grad()
         loss.backward()
         opt.step()
+
         total_loss += loss.item() * x.size(0)
         preds.append(out.detach().cpu().numpy())
         trues.append(y.cpu().numpy())
+
     preds = np.argmax(np.concatenate(preds), axis=1)
     trues = np.concatenate(trues)
     acc = (preds == trues).mean()
     return total_loss / len(loader.dataset), acc
 
+
 def eval_epoch(model, loader, loss_fn, device):
     model.eval()
-    total_loss = 0
+    total_loss = 0.0
     preds = []
     trues = []
     with torch.no_grad():
@@ -100,13 +114,16 @@ def eval_epoch(model, loader, loss_fn, device):
             total_loss += loss.item() * x.size(0)
             preds.append(out.cpu().numpy())
             trues.append(y.cpu().numpy())
+
     preds = np.argmax(np.concatenate(preds), axis=1)
     trues = np.concatenate(trues)
     acc = (preds == trues).mean()
     return total_loss / len(loader.dataset), acc, trues, preds
 
+
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device:", device)
 
     def load(path):
         return np.load(path)
@@ -125,13 +142,17 @@ def main(args):
     val_ds = ECGDataset(X_val, y_val)
     test_ds = ECGDataset(X_test, y_test)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     class_counts = np.bincount(y_train, minlength=n_classes)
+    print("Detected classes:", n_classes)
+    print("Class counts:", class_counts)
+
     weights = 1.0 / (class_counts + 1e-6)
     weights = weights / weights.sum() * n_classes
+    print("Class weights:", weights)
+
     weights = torch.tensor(weights, dtype=torch.float32).to(device)
 
     model = Baseline1DCNN(in_channels, n_classes, args.dropout).to(device)
@@ -142,16 +163,51 @@ def main(args):
 
     loss_fn = nn.CrossEntropyLoss(weight=weights)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=0.5, patience=3)
+
+    full_indices = np.arange(len(train_ds))
 
     best_loss = 1e9
     os.makedirs(args.ckpt_dir, exist_ok=True)
 
     for epoch in range(1, args.epochs + 1):
+
+        if args.mode == "baseline":
+            train_loader = DataLoader(
+                train_ds,
+                batch_size=args.batch_size,
+                shuffle=True,
+                num_workers=args.num_workers,
+            )
+
+        elif args.mode == "pdd_srd":
+            if epoch == args.epochs:
+                epoch_indices = full_indices
+            else:
+                frac = args.gamma ** (epoch - 1)
+                size = max(1, int(frac * len(full_indices)))
+                epoch_indices = np.random.choice(full_indices, size=size, replace=False)
+
+            print(f"Epoch {epoch}: using {len(epoch_indices)} / {len(full_indices)} samples")
+
+            sampler = torch.utils.data.SubsetRandomSampler(epoch_indices)
+            train_loader = DataLoader(
+                train_ds,
+                batch_size=args.batch_size,
+                sampler=sampler,
+                num_workers=args.num_workers,
+            )
+
         tr_loss, tr_acc = train_epoch(model, train_loader, opt, loss_fn, device)
         val_loss, val_acc, _, _ = eval_epoch(model, val_loader, loss_fn, device)
         scheduler.step(val_loss)
-        print(f"Epoch {epoch}/{args.epochs}  Train Loss={tr_loss:.4f} Acc={tr_acc:.4f}  Val Loss={val_loss:.4f} Acc={val_acc:.4f}")
+
+        print(
+            f"Epoch {epoch}/{args.epochs} "
+            f"Train Loss={tr_loss:.4f} Acc={tr_acc:.4f} "
+            f"Val Loss={val_loss:.4f} Acc={val_acc:.4f}"
+        )
+
         if val_loss < best_loss:
             best_loss = val_loss
             torch.save(model.state_dict(), os.path.join(args.ckpt_dir, "best_model.pth"))
@@ -165,6 +221,7 @@ def main(args):
     print(confusion_matrix(true, pred))
     print(classification_report(true, pred, digits=4))
 
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--data_dir", type=str, default="./results/baseline")
@@ -176,5 +233,10 @@ if __name__ == "__main__":
     p.add_argument("--augment", action="store_true")
     p.add_argument("--ckpt_dir", type=str, default="./results/baseline_ckpt")
     p.add_argument("--resume", type=str, default=None)
+
+    # NEW ARGUMENTS FOR PDD
+    p.add_argument("--mode", type=str, default="baseline", choices=["baseline", "pdd_srd"])
+    p.add_argument("--gamma", type=float, default=0.95)
+
     args = p.parse_args()
     main(args)
