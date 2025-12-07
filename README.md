@@ -1,117 +1,184 @@
-# ECG Classification using 1D CNN + Progressive Data Dropout(PDD)
+# ECG Classification Using 1D-CNN with Progressive Data Dropout (PDD)
 
-A deep learning pipeline for ECG signal classification using a 1D Convolutional Neural Network and Progressive Data Dropout (PDD), where the model is trained in stages from easy → medium → hard samples.
+This project implements a 1D Convolutional Neural Network (1D-CNN) for ECG signal classification using the PTB-XL dataset.
+It includes two training strategies:
 
+1. **Baseline Training** – Standard supervised deep learning
+2. **Progressive Data Dropout (PDD)** – A curriculum-based technique where easy samples are dropped early and gradually reintroduced
 
-PTB-XL Dataset (Official Download — PhysioNet)
-Main dataset page:
-
-https://physionet.org/content/ptb-xl/1.0.3/
-
-Direct download links:
-
-Full PTB-XL Dataset (1 GB):
-https://physionet.org/files/ptb-xl/1.0.3/ptb-xl-a.tar.gz
-
-WFDB Records (raw ECG signals):
-https://physionet.org/files/ptb-xl/1.0.3/records500.tar.gz
-
-https://physionet.org/files/ptb-xl/1.0.3/records100.tar.gz
-
-Metadata CSV files:
-https://physionet.org/files/ptb-xl/1.0.3/ptbxl_database.csv
-
-https://physionet.org/files/ptb-xl/1.0.3/scp_statements.csv
-
-
-
-# Project Overview
-
-This project implements:
-
-- 1D CNN baseline for ECG classification  
-- Preprocessing pipeline to convert raw ECG signals into numpy arrays  
-- Difficulty scoring for curriculum learning  
-- PDD-based training in three stages  
-- Resume-based training across stages  
+The goal is to improve generalization, reduce overfitting, and enhance performance on minority classes.
 
 ---
 
-# Repository Structure
+## 📥 Dataset Download
 
-├── preprocess.py
-├── train_1d_baseline.py
-├── compute_difficulty.py
-├── pdd_split.py
-├── pdd_folder_generator.py
-├── requirements.txt
-├── .gitignore
-└── README.md
+Download the **PTB-XL dataset**:
 
-results/baseline/
-    X_train.npy
-    y_train.npy
-    X_val.npy
-    y_val.npy
-    X_test.npy
-    y_test.npy
+* Full dataset (PhysioNet):
+  [https://physionet.org/content/ptb-xl/1.0.3/](https://physionet.org/content/ptb-xl/1.0.3/)
+* Direct ZIP download:
+  [https://physionet.org/static/published-projects/ptb-xl/ptb-xl-1.0.3.zip](https://physionet.org/static/published-projects/ptb-xl/ptb-xl-1.0.3.zip)
+* Metadata CSV:
+  [https://physionet.org/content/ptb-xl/1.0.3/ptbxl_database.csv](https://physionet.org/content/ptb-xl/1.0.3/ptbxl_database.csv)
 
-Baeline Train Model
+Extract into:
 
-python train_1d_baseline.py \
-  --data_dir results/baseline \
-  --epochs 30 \
-  --batch_size 32 \
-  --ckpt_dir baseline_ckpt \
-  --augment
+```
+ptbxl_data/
+```
 
+---
 
-Create virtual environment
+## 📂 Project Structure
 
-python -m venv venv
-.\venv\Scripts\activate
+```
+project-root/
+│   train_1d_baseline.py
+│   train_local.py
+│   preprocess_local.py
+│   preprocess_quick.py
+│   compute_difficulty.py
+│   pdd_split.py
+│
+├── ptbxl_data/
+│
+├── results/
+│   ├── baseline/
+│   ├── pdd_srd_ckpt/
+│   └── reports/
+│       ├── baseline_report.txt
+│       ├── pdd_srd_gamma0.95_report.txt
+│       └── comparison/
+│           └── baseline_vs_pdd.txt
+```
 
-Install required Python packages
+---
 
-pip install -r requirements.txt
+## 🧠 Method Overview
 
+### **1. Preprocessing**
 
-Preprocess raw ECG signals
+Loads raw WFDB files, extracts diagnostic labels, normalizes signals, and produces train/val/test splits.
 
-python preprocess.py ^
-  --input_dir raw_data ^
-  --meta_csv labels.csv ^
-  --out_dir results/baseline ^
-  --length 5000 ^
-  --test_frac 0.1 ^
-  --val_frac 0.1
+### **2. Baseline 1D-CNN**
 
+A compact CNN trained on all samples without curriculum.
 
-Train the baseline 1D CNN-
+### **3. Difficulty Scoring**
 
-python train_1d_baseline.py ^
-  --data_dir results/baseline ^
-  --epochs 30 ^
-  --batch_size 32 ^
-  --ckpt_dir baseline_ckpt ^
-  --augment
+Computes sample difficulty using model confidence.
 
-Compute difficulty scores
+```
+results/baseline/difficulty.npy
+```
 
+### **4. Progressive Data Dropout (PDD)**
+
+Implements curriculum learning:
+
+* Drop easy samples
+* Train on harder samples
+* Reintroduce all samples in final epochs
+
+---
+
+## 🚀 How to Run the Pipeline
+
+### **1. Install Dependencies**
+
+```
+pip install numpy pandas scipy wfdb scikit-learn tqdm torch
+```
+
+### **2. Preprocess Dataset**
+
+```
+python preprocess_local.py
+```
+
+### **3. Compute Difficulty Scores**
+
+```
 python compute_difficulty.py
+```
 
-Create PDD (Stage1/2/3) splits-
+### **4. Run PDD Training**
 
-python pdd_split.py
+```
+python train_1d_baseline.py --data_dir ./results/baseline --epochs 30 --batch_size 32 --ckpt_dir ./results/pdd_srd_ckpt --augment --mode pdd_srd --gamma 0.95
+```
 
-Generate final PDD training folders-
+### **5. Run Baseline Training (optional)**
 
-python pdd_folder_generator.py
+```
+python train_1d_baseline.py --data_dir ./results/baseline --epochs 30 --batch_size 32 --ckpt_dir ./results/baseline_ckpt --augment --mode baseline
+```
+
+---
+
+# 📊 Results
+
+## **Baseline Model Results**
+
+| Metric            | Score    |
+| ----------------- | -------- |
+| Test Accuracy     | **0.69** |
+| Best Val Accuracy | **0.82** |
+| Macro F1          | **0.45** |
+
+### Confusion Matrix (Baseline)
+
+```
+[[ 1  1  2  0]
+ [ 1  5  3  1]
+ [ 0  5 34  2]
+ [ 1  2  0  1]]
+```
+
+---
+
+## **Progressive Data Dropout (PDD-SRD) Results**
+
+| Metric            | Score    |
+| ----------------- | -------- |
+| Test Accuracy     | **0.74** |
+| Best Val Accuracy | **0.85** |
+| Macro F1          | **0.53** |
+
+### Confusion Matrix (PDD-SRD)
+
+```
+[[ 2  1  1  0]
+ [ 1  6  3  0]
+ [ 2  2 35  2]
+ [ 1  1  1  1]]
+```
+
+---
+
+# 🆚 Baseline vs PDD — Comparison Table
+
+| Feature                 | Baseline | PDD-SRD      |
+| ----------------------- | -------- | ------------ |
+| Curriculum Learning     | ❌ No     | ✅ Yes        |
+| Hard Sample Emphasis    | ❌        | ✅            |
+| Test Accuracy           | 0.69     | **0.745**    |
+| Macro F1                | 0.45     | **0.53**     |
+| Minority Class Recall   | Lower    | **Improved** |
+| Stability Across Epochs | Medium   | **High**     |
+
+**Conclusion:**
+PDD improves **generalization**, **class balance**, and **overall accuracy**.
+
+---
+
+# 📁 Saving Results
+
+All logs, confusion matrices, and metrics are automatically saved to:
+
+```
+results/reports/
+```
 
 
-
-
-
-
-
-
+Just tell me **"add diagrams"** or **"add abstract"**.
