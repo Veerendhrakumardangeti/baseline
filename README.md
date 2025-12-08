@@ -29,7 +29,7 @@ ptbxl_data/
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 project-root/
@@ -82,7 +82,7 @@ Implements curriculum learning:
 
 ---
 
-## 🚀 How to Run the Pipeline
+## How to Run the Pipeline
 
 ### **1. Install Dependencies**
 
